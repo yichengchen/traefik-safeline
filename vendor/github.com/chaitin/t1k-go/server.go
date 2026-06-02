@@ -1,6 +1,7 @@
 package t1k
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ type Server struct {
 	closeCh       chan struct{}
 	logger        *log.Logger
 	mu            sync.Mutex
+	timeout       time.Duration
 }
 
 func (s *Server) newConn() error {
@@ -49,8 +51,16 @@ func (s *Server) GetConn() (*conn, error) {
 			}
 		}
 	}
-	c := <-s.poolCh
-	return c, nil
+	if s.timeout <= 0 {
+		c := <-s.poolCh
+		return c, nil
+	}
+	select {
+	case c := <-s.poolCh:
+		return c, nil
+	case <-time.After(s.timeout):
+		return nil, fmt.Errorf("timed out waiting for t1k connection after %s", s.timeout)
+	}
 }
 
 func (s *Server) PutConn(c *conn) {
@@ -89,7 +99,10 @@ func (s *Server) runHeartbeatCo() {
 	}
 }
 
-func NewFromSocketFactoryWithPoolSize(socketFactory func() (net.Conn, error), poolSize int) (*Server, error) {
+func NewFromSocketFactoryWithPoolSizeAndTimeout(socketFactory func() (net.Conn, error), poolSize int, timeout time.Duration) (*Server, error) {
+	if poolSize <= 0 {
+		poolSize = DEFAULT_POOL_SIZE
+	}
 	ret := &Server{
 		socketFactory: socketFactory,
 		poolCh:        make(chan *conn, poolSize),
@@ -97,6 +110,7 @@ func NewFromSocketFactoryWithPoolSize(socketFactory func() (net.Conn, error), po
 		closeCh:       make(chan struct{}),
 		logger:        log.New(os.Stdout, "snserver", log.LstdFlags),
 		mu:            sync.Mutex{},
+		timeout:       timeout,
 	}
 	for i := 0; i < poolSize; i++ {
 		err := ret.newConn()
@@ -108,14 +122,25 @@ func NewFromSocketFactoryWithPoolSize(socketFactory func() (net.Conn, error), po
 	return ret, nil
 }
 
+func NewFromSocketFactoryWithPoolSize(socketFactory func() (net.Conn, error), poolSize int) (*Server, error) {
+	return NewFromSocketFactoryWithPoolSizeAndTimeout(socketFactory, poolSize, 0)
+}
+
 func NewFromSocketFactory(socketFactory func() (net.Conn, error)) (*Server, error) {
 	return NewFromSocketFactoryWithPoolSize(socketFactory, DEFAULT_POOL_SIZE)
 }
 
-func NewWithPoolSize(addr string, poolSize int) (*Server, error) {
-	return NewFromSocketFactoryWithPoolSize(func() (net.Conn, error) {
+func NewWithPoolSizeAndTimeout(addr string, poolSize int, timeout time.Duration) (*Server, error) {
+	return NewFromSocketFactoryWithPoolSizeAndTimeout(func() (net.Conn, error) {
+		if timeout > 0 {
+			return net.DialTimeout("tcp", addr, timeout)
+		}
 		return net.Dial("tcp", addr)
-	}, poolSize)
+	}, poolSize, timeout)
+}
+
+func NewWithPoolSize(addr string, poolSize int) (*Server, error) {
+	return NewWithPoolSizeAndTimeout(addr, poolSize, 0)
 }
 
 func New(addr string) (*Server, error) {

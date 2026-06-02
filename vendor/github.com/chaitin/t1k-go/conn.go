@@ -3,6 +3,7 @@ package t1k
 import (
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/chaitin/t1k-go/detection"
 	"github.com/chaitin/t1k-go/t1k"
@@ -44,38 +45,75 @@ func (c *conn) Close() {
 	c.socket.Close()
 }
 
+func (c *conn) withDeadline(fn func() error) error {
+	if c.server.timeout > 0 {
+		if err := c.socket.SetDeadline(time.Now().Add(c.server.timeout)); err != nil {
+			return err
+		}
+		defer c.socket.SetDeadline(time.Time{})
+	}
+	return fn()
+}
+
 func (c *conn) DetectRequestInCtx(dc *detection.DetectionContext) (*detection.Result, error) {
-	ret, err := DetectRequestInCtx(c.socket, dc)
+	var ret *detection.Result
+	err := c.withDeadline(func() error {
+		var err error
+		ret, err = DetectRequestInCtx(c.socket, dc)
+		return err
+	})
 	c.onErr(err)
 	return ret, err
 }
 
 func (c *conn) DetectResponseInCtx(dc *detection.DetectionContext) (*detection.Result, error) {
-	ret, err := DetectResponseInCtx(c.socket, dc)
+	var ret *detection.Result
+	err := c.withDeadline(func() error {
+		var err error
+		ret, err = DetectResponseInCtx(c.socket, dc)
+		return err
+	})
 	c.onErr(err)
 	return ret, misc.ErrorWrap(err, "")
 }
 
 func (c *conn) Detect(dc *detection.DetectionContext) (*detection.Result, *detection.Result, error) {
-	retReq, retRsp, err := Detect(c.socket, dc)
+	var retReq, retRsp *detection.Result
+	err := c.withDeadline(func() error {
+		var err error
+		retReq, retRsp, err = Detect(c.socket, dc)
+		return err
+	})
 	c.onErr(err)
 	return retReq, retRsp, misc.ErrorWrap(err, "")
 }
 
 func (c *conn) DetectHttpRequest(req *http.Request) (*detection.Result, error) {
-	ret, err := DetectHttpRequest(c.socket, req)
+	var ret *detection.Result
+	err := c.withDeadline(func() error {
+		var err error
+		ret, err = DetectHttpRequest(c.socket, req)
+		return err
+	})
 	c.onErr(err)
 	return ret, err
 }
 
 func (c *conn) DetectRequest(req detection.Request) (*detection.Result, error) {
-	ret, err := DetectRequest(c.socket, req)
+	var ret *detection.Result
+	err := c.withDeadline(func() error {
+		var err error
+		ret, err = DetectRequest(c.socket, req)
+		return err
+	})
 	c.onErr(err)
 	return ret, err
 }
 
 func (c *conn) Heartbeat() {
-	err := DoHeartbeat(c.socket)
+	err := c.withDeadline(func() error {
+		return DoHeartbeat(c.socket)
+	})
 	c.onErr(err)
 }
 
