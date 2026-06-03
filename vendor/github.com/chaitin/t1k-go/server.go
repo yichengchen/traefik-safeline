@@ -43,14 +43,18 @@ func (s *Server) newConn() error {
 }
 
 func (s *Server) GetConn() (*conn, error) {
+	select {
+	case c := <-s.poolCh:
+		return c, nil
+	default:
+	}
+
 	if s.count < s.poolSize {
-		for i := 0; i < (s.poolSize - s.count); i++ {
-			err := s.newConn()
-			if err != nil {
-				return nil, err
-			}
+		if err := s.newConn(); err != nil {
+			return nil, err
 		}
 	}
+
 	if s.timeout <= 0 {
 		c := <-s.poolCh
 		return c, nil
@@ -115,6 +119,9 @@ func NewFromSocketFactoryWithPoolSizeAndTimeout(socketFactory func() (net.Conn, 
 	for i := 0; i < poolSize; i++ {
 		err := ret.newConn()
 		if err != nil {
+			if ret.count > 0 {
+				break
+			}
 			return nil, err
 		}
 	}

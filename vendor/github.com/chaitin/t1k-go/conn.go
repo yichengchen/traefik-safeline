@@ -27,14 +27,8 @@ func makeConn(socket net.Conn, server *Server) *conn {
 
 func (c *conn) onErr(err error) {
 	if err != nil {
-		// re-open socket to recover from possible error state
 		c.socket.Close()
-		sock, errConnect := c.server.socketFactory()
-		if errConnect != nil {
-			c.failing = true
-			return
-		}
-		c.socket = sock
+		c.failing = true
 	}
 }
 
