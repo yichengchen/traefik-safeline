@@ -25,21 +25,39 @@ type Server struct {
 	poolSize      int
 	count         int
 	closeCh       chan struct{}
+	refillCh      chan struct{}
 	logger        *log.Logger
 	mu            sync.Mutex
 	timeout       time.Duration
 }
 
-func (s *Server) newConn() error {
+func (s *Server) addConn(c *conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.count >= s.poolSize {
+		c.Close()
+		return false
+	}
+	s.count += 1
+	s.poolCh <- c
+	return true
+}
+
+func (s *Server) newConn() error {
 	sock, err := s.socketFactory()
 	if err != nil {
 		return err
 	}
-	s.count += 1
-	s.poolCh <- makeConn(sock, s)
+	s.addConn(makeConn(sock, s))
 	return nil
+}
+
+func (s *Server) scheduleRefill() {
+	select {
+	case s.refillCh <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Server) GetConn() (*conn, error) {
@@ -49,22 +67,8 @@ func (s *Server) GetConn() (*conn, error) {
 	default:
 	}
 
-	if s.count < s.poolSize {
-		if err := s.newConn(); err != nil {
-			return nil, err
-		}
-	}
-
-	if s.timeout <= 0 {
-		c := <-s.poolCh
-		return c, nil
-	}
-	select {
-	case c := <-s.poolCh:
-		return c, nil
-	case <-time.After(s.timeout):
-		return nil, fmt.Errorf("timed out waiting for t1k connection after %s", s.timeout)
-	}
+	s.scheduleRefill()
+	return nil, fmt.Errorf("no available t1k connection; refill scheduled")
 }
 
 func (s *Server) PutConn(c *conn) {
@@ -73,6 +77,7 @@ func (s *Server) PutConn(c *conn) {
 	if c.failing {
 		s.count -= 1
 		c.Close()
+		s.scheduleRefill()
 	} else {
 		s.poolCh <- c
 	}
@@ -103,6 +108,33 @@ func (s *Server) runHeartbeatCo() {
 	}
 }
 
+func (s *Server) refillPool() {
+	for {
+		s.mu.Lock()
+		need := s.poolSize - s.count
+		s.mu.Unlock()
+
+		if need <= 0 {
+			return
+		}
+		if err := s.newConn(); err != nil {
+			s.logger.Printf("t1k refill connection failed: %v", err)
+			return
+		}
+	}
+}
+
+func (s *Server) runRefillCo() {
+	for {
+		select {
+		case <-s.closeCh:
+			return
+		case <-s.refillCh:
+			s.refillPool()
+		}
+	}
+}
+
 func NewFromSocketFactoryWithPoolSizeAndTimeout(socketFactory func() (net.Conn, error), poolSize int, timeout time.Duration) (*Server, error) {
 	if poolSize <= 0 {
 		poolSize = DEFAULT_POOL_SIZE
@@ -112,6 +144,7 @@ func NewFromSocketFactoryWithPoolSizeAndTimeout(socketFactory func() (net.Conn, 
 		poolCh:        make(chan *conn, poolSize),
 		poolSize:      poolSize,
 		closeCh:       make(chan struct{}),
+		refillCh:      make(chan struct{}, 1),
 		logger:        log.New(os.Stdout, "snserver", log.LstdFlags),
 		mu:            sync.Mutex{},
 		timeout:       timeout,
@@ -126,6 +159,7 @@ func NewFromSocketFactoryWithPoolSizeAndTimeout(socketFactory func() (net.Conn, 
 		}
 	}
 	go ret.runHeartbeatCo()
+	go ret.runRefillCo()
 	return ret, nil
 }
 
