@@ -18,19 +18,21 @@ import (
 // Config the plugin configuration.
 type Config struct {
 	// Addr is the address for the detector
-	Addr     string `yaml:"addr"`
-	PoolSize int    `yaml:"pool_size"`
-	Timeout  string `yaml:"timeout"`
-	FailOpen bool   `yaml:"fail_open"`
+	Addr      string `yaml:"addr"`
+	PoolSize  int    `yaml:"pool_size"`
+	Timeout   string `yaml:"timeout"`
+	FailOpen  bool   `yaml:"fail_open"`
+	KeepAlive bool   `yaml:"keep_alive"`
 }
 
 // CreateConfig creates the default plugin configuration.
 func CreateConfig() *Config {
 	return &Config{
-		Addr:     "",
-		PoolSize: 100,
-		Timeout:  "2s",
-		FailOpen: true,
+		Addr:      "",
+		PoolSize:  4,
+		Timeout:   "500ms",
+		FailOpen:  true,
+		KeepAlive: false,
 	}
 }
 
@@ -63,6 +65,9 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 }
 
 func (s *Safeline) initServer() error {
+	if !s.config.KeepAlive {
+		return nil
+	}
 	if s.server != nil {
 		return nil
 	}
@@ -84,6 +89,9 @@ func (s *Safeline) detect(req *http.Request) (result *detection.Result, err erro
 			err = fmt.Errorf("panic in detection: %v", r)
 		}
 	}()
+	if !s.config.KeepAlive {
+		return t1k.DetectHttpRequestOnceWithTimeout(s.config.Addr, req, s.timeout)
+	}
 	return s.server.DetectHttpRequest(req)
 }
 

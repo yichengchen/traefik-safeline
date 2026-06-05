@@ -65,7 +65,7 @@ experimental:
   plugins:
     safeline:
       moduleName: github.com/yichengchen/traefik-safeline
-      version: v1.4.1
+      version: v1.4.4
 ```
 
 Here is an example of a file provider dynamic configuration (given here in YAML), where the interesting part is the `http.middlewares` section:
@@ -95,8 +95,11 @@ http:
         safeline:
           addr: safeline-detector.safeline:8000 # Safeline detection engine address
           poolSize: 4
-          timeout: 2s
+          timeout: 500ms
           failOpen: true
+          keepAlive: false
 ```
+
+`keepAlive: false` uses a short-lived detector connection for each request, avoiding stale pooled connections when the detector closes idle sockets. Set `keepAlive: true` to use the pooled detector client.
 
 `timeout` limits dialing the detector, waiting for a pooled detector connection, and detector read/write operations. With `failOpen: true`, detector errors and timeouts are logged and the request is passed to the upstream service instead of blocking the website.

@@ -172,12 +172,7 @@ func NewFromSocketFactory(socketFactory func() (net.Conn, error)) (*Server, erro
 }
 
 func NewWithPoolSizeAndTimeout(addr string, poolSize int, timeout time.Duration) (*Server, error) {
-	return NewFromSocketFactoryWithPoolSizeAndTimeout(func() (net.Conn, error) {
-		if timeout > 0 {
-			return net.DialTimeout("tcp", addr, timeout)
-		}
-		return net.Dial("tcp", addr)
-	}, poolSize, timeout)
+	return NewFromSocketFactoryWithPoolSizeAndTimeout(newTCPSocketFactory(addr, timeout), poolSize, timeout)
 }
 
 func NewWithPoolSize(addr string, poolSize int) (*Server, error) {
@@ -186,6 +181,26 @@ func NewWithPoolSize(addr string, poolSize int) (*Server, error) {
 
 func New(addr string) (*Server, error) {
 	return NewWithPoolSize(addr, DEFAULT_POOL_SIZE)
+}
+
+func newTCPSocketFactory(addr string, timeout time.Duration) func() (net.Conn, error) {
+	return func() (net.Conn, error) {
+		if timeout > 0 {
+			return net.DialTimeout("tcp", addr, timeout)
+		}
+		return net.Dial("tcp", addr)
+	}
+}
+
+func DetectHttpRequestOnceWithTimeout(addr string, req *http.Request, timeout time.Duration) (*detection.Result, error) {
+	sock, err := newTCPSocketFactory(addr, timeout)()
+	if err != nil {
+		return nil, err
+	}
+
+	c := makeConn(sock, &Server{timeout: timeout})
+	defer c.Close()
+	return c.DetectHttpRequest(req)
 }
 
 func (s *Server) DetectRequestInCtx(dc *detection.DetectionContext) (*detection.Result, error) {
